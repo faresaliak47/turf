@@ -71,10 +71,10 @@ def apply_sidebar_collapse_css():
     When the user hides the sidebar, collapse it to zero width by zeroing
     both flex-basis and width so the main content expands to fill the row.
     """
-    if st.session_state.get('sidebar_collapsed', False):
-        st.markdown("""
-<style>
-section[data-testid="stSidebar"] {
+    collapsed = st.session_state.get('sidebar_collapsed', False)
+    desktop_css = """
+@media (min-width: 769px) {
+  section[data-testid="stSidebar"] {
     flex: 0 0 0px !important;
     width: 0 !important;
     min-width: 0 !important;
@@ -83,7 +83,30 @@ section[data-testid="stSidebar"] {
     padding: 0 !important;
     border: none !important;
     box-shadow: none !important;
+  }
+  .st-key-sidebar_reopen_btn { display: block !important; }
 }
+""" if collapsed else ""
+    mobile_transform = "translateX(110%)" if collapsed else "translateX(0)"
+    st.markdown(f"""
+<style>
+{desktop_css}
+@media (max-width: 768px) {{
+  [data-testid="stAppViewContainer"] {{ overflow: visible !important; }}
+  section[data-testid="stSidebar"] {{
+    position: fixed !important;
+    inset: 0 0 0 auto !important;
+    z-index: 10000 !important;
+    flex: 0 0 min(86vw, 290px) !important;
+    width: min(86vw, 290px) !important;
+    min-width: min(86vw, 290px) !important;
+    max-width: min(86vw, 290px) !important;
+    height: 100dvh !important;
+    transform: {mobile_transform} !important;
+    transition: transform 0.22s ease !important;
+    box-shadow: 0 0 24px rgba(0,0,0,0.24) !important;
+  }}
+}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -94,10 +117,10 @@ def render_sidebar_reopen_button():
     so the user always has a way to bring it back. Call this once,
     early in app.py, right after apply_sidebar_collapse_css().
     """
-    if st.session_state.get('sidebar_collapsed', False):
-        if st.button("☰", key="sidebar_reopen_btn", help="إظهار القائمة"):
-            st.session_state.sidebar_collapsed = False
-            st.rerun()
+    collapsed = st.session_state.get('sidebar_collapsed', False)
+    if st.button("☰", key="sidebar_reopen_btn", help="فتح أو إغلاق القائمة"):
+        st.session_state.sidebar_collapsed = not collapsed
+        st.rerun()
 
 
 def render_sidebar_brand():

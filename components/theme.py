@@ -186,9 +186,10 @@ button[kind="header"] {{
 
 /* Floating reopen button shown in the main area once the sidebar is hidden */
 .st-key-sidebar_reopen_btn {{
+    display: none !important;
     position: fixed !important;
     top: 18px !important;
-    inset-inline-end: 18px !important;
+    right: 18px !important;
     z-index: 9999 !important;
 }}
 .st-key-sidebar_reopen_btn button {{
@@ -299,6 +300,13 @@ section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="sele
     direction: rtl !important;
     text-align: right !important;
 }}
+/* The sidebar's general white text rule is intentionally scoped to the
+   dark navigation surface. The project picker itself is a light control,
+   so give its selected value and search input a readable dark color. */
+section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] * {{
+    color: {COLORS['text']} !important;
+    -webkit-text-fill-color: {COLORS['text']} !important;
+}}
 /* Hide the radio group's own widget label ("القائمة الرئيسية") — target
    it explicitly by Streamlit's stable testid so it can never be
    re-shown by the broader option-styling rule below, regardless of
@@ -378,12 +386,6 @@ section[data-testid="stSidebar"] .stRadio label svg {{
 section[data-testid="stSidebar"] .stRadio div[data-baseweb="radio"] {{
     display: none !important;
 }}
-section[data-testid="stSidebar"] .stRadio label > div:first-of-type:not([data-testid="stMarkdownContainer"]) {{
-    display: none !important;
-}}
-section[data-testid="stSidebar"] .stRadio div[data-testid="stRadioGroup"] > label > div:first-child {{
-    display: none !important;
-}}
 /* Highlight the currently selected nav item (modern browsers) */
 section[data-testid="stSidebar"] .stRadio label:has(input:checked) {{
     background: {COLORS['primary']} !important;
@@ -394,6 +396,15 @@ section[data-testid="stSidebar"] .stRadio label:has(input:checked) {{
 
 /* ═══ RESPONSIVE — collapse sidebar on narrow screens ═══ */
 @media (max-width: 768px) {{
+    /* The desktop sidebar is collapsed on phones. Keep a floating menu
+       control available so users can open the off-canvas navigation. */
+    .st-key-sidebar_reopen_btn {{
+        display: block !important;
+        top: 10px !important;
+        right: 10px !important;
+        z-index: 10002 !important;
+    }}
+
     section[data-testid="stSidebar"] {{
         flex: 0 0 0px !important;
         width: 0 !important;
