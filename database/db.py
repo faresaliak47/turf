@@ -1,3 +1,6 @@
+import logging
+import os
+
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, Session
 from database.models import Base
@@ -7,6 +10,11 @@ from database.paths import get_db_path
 # safety, legacy-location backward compatibility) lives in database/paths.py
 # — see that module's docstring for the full rationale.
 DB_PATH = get_db_path()
+# get_db_path() already prepares this folder. Keep a defensive check here,
+# before SQLAlchemy/SQLite opens the file, so a missing parent never becomes
+# an opaque "unable to open database file" startup failure.
+os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
+_log = logging.getLogger(__name__)
 
 # expire_on_commit=False prevents stale-data issues after commit/rerun cycles
 engine = create_engine(
@@ -43,9 +51,13 @@ DEFAULT_PROJECT_NAME = "المشروع الافتراضي"
 
 
 def init_db():
-    Base.metadata.create_all(bind=engine)
-    _ensure_default_project()
-    _migrate_add_missing_columns()
+    try:
+        Base.metadata.create_all(bind=engine)
+        _ensure_default_project()
+        _migrate_add_missing_columns()
+    except Exception:
+        _log.exception("Database startup failed (path=%s)", DB_PATH)
+        raise
 
 
 def _ensure_default_project():

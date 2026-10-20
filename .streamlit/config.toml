@@ -1,7 +1,10 @@
 [server]
 address = "0.0.0.0"
 port = 8501
-headless = false
+# Streamlit Cloud runs without an interactive browser or terminal prompt.
+# Keep the server headless so startup never waits for a local UI.
+headless = true
+showEmailPrompt = false
 
 [theme]
 base = "light"

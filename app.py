@@ -1,14 +1,13 @@
 import sys
 import os
+import logging
 sys.path.insert(0, os.path.dirname(__file__))
 
 import streamlit as st
-from database.db import init_db, get_db
-from database.models import Employee, Attendance, Overtime, Advance, User
-from services.audit_service import audit_actor
-from services.auth import is_logged_in, logout, needs_setup, can_access, ROLE_LABELS
 from datetime import date, timedelta
 import hashlib
+
+_startup_log = logging.getLogger("turf_hr.startup")
 
 # ── Page config ─────────────────────────────────────────────
 st.set_page_config(
@@ -18,10 +17,25 @@ st.set_page_config(
     initial_sidebar_state='expanded'
 )
 
-from components.theme import inject_global_css
-inject_global_css()
+try:
+    # Keep all DB/auth imports in this guarded startup block as those modules
+    # construct the SQLite engine during import. A failure must be logged with
+    # its traceback instead of leaving Cloud with only a failed health check.
+    from database.db import init_db, get_db
+    from database.models import Employee, Attendance, Overtime, Advance, User
+    from services.audit_service import audit_actor
+    from services.auth import is_logged_in, logout, needs_setup, can_access, ROLE_LABELS
+    from components.theme import inject_global_css
 
-init_db()
+    inject_global_css()
+    init_db()
+except Exception:
+    _startup_log.exception("TURF HR Pro failed during startup")
+    st.error(
+        "تعذر بدء التطبيق أثناء تهيئة قاعدة البيانات أو مكونات التشغيل. "
+        "افتح Manage app ثم Logs لعرض سبب الخطأ الكامل."
+    )
+    st.stop()
 
 # Daily attendance reminder scheduler (isolated module; idempotent per process).
 try:

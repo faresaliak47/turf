@@ -5,6 +5,7 @@ expenses, received funds, and transfer fees.
 """
 import re
 import os
+import shutil
 import zipfile
 from pathlib import PurePosixPath
 from io import BytesIO
@@ -536,7 +537,7 @@ def _store_check_attachment(uploaded, check_number: str, kind: str):
     ext = os.path.splitext(uploaded.name)[1].lower()
     if ext.lstrip(".") not in _CHECK_UPLOAD_TYPES:
         raise ValueError("صيغة المرفق غير مدعومة.")
-    folder = os.path.join(get_app_data_dir(), "check_attachments")
+    folder = _check_attachment_folder(kind)
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, _check_attachment_name(check_number, kind, ext))
     with open(path, "wb") as target:
@@ -544,8 +545,53 @@ def _store_check_attachment(uploaded, check_number: str, kind: str):
     return path
 
 
-def _import_check_sheet(excel_file, attachments_zip):
-    """Import the Arabic cheque register layout and optional linked files."""
+def _check_attachment_folder(kind: str) -> str:
+    """Return the dedicated folder for cheque images or invoice attachments."""
+    folder_name = "الفواتير" if kind == "invoice" else "الشيكات"
+    return os.path.join(get_app_data_dir(), "check_attachments", folder_name)
+
+
+def _open_check_attachment_folder(kind: str):
+    """Separate legacy attachments into folders, then open that folder.
+
+    Existing files are copied and their database paths updated. Originals
+    remain in the previous shared folder as a backup.
+    """
+    folder = _check_attachment_folder(kind)
+    os.makedirs(folder, exist_ok=True)
+    field = "invoice_attachment" if kind == "invoice" else "check_attachment"
+    db = get_db()
+    try:
+        rows = db.query(CheckRecord).filter(getattr(CheckRecord, field).isnot(None)).all()
+        for record in rows:
+            source = getattr(record, field)
+            if not source or not os.path.isfile(source):
+                continue
+            if os.path.normcase(os.path.abspath(os.path.dirname(source))) == os.path.normcase(os.path.abspath(folder)):
+                continue
+            extension = os.path.splitext(source)[1].lower()
+            filename = _check_attachment_name(record.check_number, kind, extension)
+            destination = os.path.join(folder, filename)
+            if os.path.exists(destination):
+                filename = _check_attachment_name(f"{record.check_number}_{record.id}", kind, extension)
+                destination = os.path.join(folder, filename)
+            shutil.copy2(source, destination)
+            setattr(record, field, destination)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+    if hasattr(os, "startfile"):
+        os.startfile(folder)
+    else:
+        st.info(f"مسار المجلد على جهاز التطبيق: `{folder}`")
+
+
+def _import_check_sheet(excel_file, attachments_zip, invoices_zip=None):
+    """Import the cheque register and optional cheque/invoice attachment ZIPs."""
     aliases = {
         "check_number": ["رقم الشيك", "رقم الشيكات", "check number", "cheque number"],
         "company": ["الشركة المطورة", "الشركة", "company"],
@@ -619,11 +665,13 @@ def _import_check_sheet(excel_file, attachments_zip):
         if field in header_positions:
             hyperlink_columns[field] = header_positions[field]
 
-    zip_files = {}
-    zip_stems = {}
-    if attachments_zip:
+    zip_indexes = {"check": ({}, {}), "invoice": ({}, {})}
+    for kind, uploaded_zip in (("check", attachments_zip), ("invoice", invoices_zip)):
+        if not uploaded_zip:
+            continue
         try:
-            with zipfile.ZipFile(BytesIO(attachments_zip.getvalue())) as archive:
+            zip_files, zip_stems = zip_indexes[kind]
+            with zipfile.ZipFile(BytesIO(uploaded_zip.getvalue())) as archive:
                 for entry in archive.infolist():
                     ext = os.path.splitext(entry.filename)[1].lower()
                     if not entry.is_dir() and ext.lstrip(".") in _CHECK_UPLOAD_TYPES:
@@ -632,7 +680,8 @@ def _import_check_sheet(excel_file, attachments_zip):
                         zip_files[basename] = payload
                         zip_stems[os.path.splitext(basename)[0]] = (ext, payload)
         except zipfile.BadZipFile:
-            return 0, 0, ["ملف المرفقات المضغوط غير صالح."]
+            label = "الشيكات" if kind == "check" else "الفواتير"
+            return 0, 0, [f"ملف ZIP لمرفقات {label} غير صالح."]
 
     db = get_db()
     imported = skipped = 0
@@ -702,15 +751,28 @@ def _import_check_sheet(excel_file, attachments_zip):
                         if link_cell.hyperlink and link_cell.hyperlink.target:
                             value = link_cell.hyperlink.target
                     basename = PurePosixPath(str(value).replace("\\", "/")).name.casefold() if value else ""
-                    file_bytes = zip_files.get(basename)
+                    zip_sources = [zip_indexes[kind]]
+                    if kind == "invoice":
+                        # Keep compatibility with the former single ZIP for both types.
+                        zip_sources.append(zip_indexes["check"])
+                    linked_stem = os.path.splitext(basename)[0]
+                    candidate_stems = [linked_stem]
+                    if kind == "invoice":
+                        candidate_stems.append(invoice_number.casefold())
+                    candidate_stems.append(check_number.casefold())
+                    file_bytes = None
                     ext = os.path.splitext(basename)[1].lower() if basename else ""
-                    if not file_bytes and value:
-                        stem = os.path.splitext(basename)[0]
-                        match = zip_stems.get(stem) or zip_stems.get(check_number.casefold())
+                    for zip_files, zip_stems in zip_sources:
+                        file_bytes = zip_files.get(basename) if basename else None
+                        if file_bytes:
+                            break
+                        match = next((zip_stems[stem] for stem in candidate_stems
+                                      if stem and stem in zip_stems), None)
                         if match:
                             ext, file_bytes = match
+                            break
                     if file_bytes:
-                        folder = os.path.join(get_app_data_dir(), "check_attachments")
+                        folder = _check_attachment_folder(kind)
                         os.makedirs(folder, exist_ok=True)
                         path = os.path.join(folder, _check_attachment_name(check_number, kind, ext))
                         with open(path, "wb") as target:
@@ -734,11 +796,16 @@ def _tab_checks():
     with st.expander("استيراد الشيت الموجود عندك", expanded=False):
         import_file = st.file_uploader("ملف سجل الشيكات Excel", type=["xlsx", "xlsm"], key="check_sheet_import")
         attachments_zip = st.file_uploader(
-            "ملف ZIP لمجلد الصور المرتبط بروابط الشيت (اختياري)", type=["zip"], key="check_sheet_import_attachments",
+            "ملف ZIP لمرفقات الشيكات (اختياري)", type=["zip"], key="check_sheet_import_attachments",
         )
+        invoices_zip = st.file_uploader(
+            "ملف ZIP لمرفقات الفواتير (اختياري — تُطابق الملفات برقم الفاتورة)",
+            type=["zip"], key="check_sheet_import_invoices",
+        )
+        st.caption("يمكن تسمية ملف الفاتورة برقمها مثل 98.pdf، أو استخدام اسم الملف المرتبط في الشيت.")
         if st.button("استيراد السجلات إلى المشروع الحالي", key="check_sheet_import_button", disabled=import_file is None):
             try:
-                imported, skipped, import_errors = _import_check_sheet(import_file, attachments_zip)
+                imported, skipped, import_errors = _import_check_sheet(import_file, attachments_zip, invoices_zip)
                 if imported or skipped:
                     st.success(f"تم استيراد {imported} سجل، وتخطي {skipped} سجل مكرر أو ناقص.")
                 for message in import_errors[:10]:
@@ -936,7 +1003,8 @@ def _tab_checks():
                 if path and os.path.isfile(path):
                     ext = os.path.splitext(path)[1].lower()
                     filename = _check_attachment_name(row["رقم الشيك"], kind, ext)
-                    archive.write(path, f"مرفقات الشيكات/{filename}")
+                    kind_folder = "الفواتير" if kind == "invoice" else "الشيكات"
+                    archive.write(path, f"مرفقات الشيكات/{kind_folder}/{filename}")
     st.download_button(
         "تنزيل Excel مع مجلد صور الشيكات وروابطها (ZIP)", data=bundle.getvalue(),
         file_name=f"سجل_الشيكات_ومرفقاته_{date.today().isoformat()}.zip",
@@ -951,6 +1019,14 @@ def _tab_checks():
             path = selected.get(key)
             with col:
                 st.markdown(f"**{label}**")
+                if key == "مرفق الفاتورة" and st.button(
+                    "📂 استعراض فولدر الفواتير", key=f"open_invoice_folder_{selected['id']}",
+                    use_container_width=True,
+                ):
+                    try:
+                        _open_check_attachment_folder("invoice")
+                    except Exception as exc:
+                        st.error(f"تعذر فتح فولدر الفواتير: {exc}")
                 if path and os.path.isfile(path):
                     with open(path, "rb") as attachment:
                         file_bytes = attachment.read()
@@ -968,6 +1044,14 @@ def _tab_checks():
                     )
                 else:
                     st.caption("لا يوجد مرفق لهذا السجل.")
+                if key == "مرفق الشيك" and st.button(
+                    "📂 استعراض فولدر الشيكات", key=f"open_check_folder_{selected['id']}",
+                    use_container_width=True,
+                ):
+                    try:
+                        _open_check_attachment_folder("check")
+                    except Exception as exc:
+                        st.error(f"تعذر فتح فولدر الشيكات: {exc}")
 
 
 # ─────────────────────────────────────────────────────────────────
